@@ -42,7 +42,7 @@ const screenSchema = new mongoose.Schema({
       },  // Seat type (Silver, Gold, Platinum)
       status: { 
         type: String, 
-        enum: ['available', 'booked', 'reserved'], 
+        enum: ['available', 'booked', 'reserved', 'locked'],  // Added 'locked' to status enum
         default: 'available' 
       },  // Track seat availability
     }

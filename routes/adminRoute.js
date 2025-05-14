@@ -1,5 +1,5 @@
 const express = require('express');
-const { body, validationResult } = require('express-validator');
+const { body, validationResult,param } = require('express-validator');
 const State = require('../models/stateSchema');
 const District = require('../models/districtSchema');
 const Theatre = require('../models/theatreSchema');
@@ -13,29 +13,46 @@ const screenController = require('../controllers/screenController');
 const middleware = require('../middlewares/middleware');
 const adminAnalyticsController = require('../controllers/adminAnalyticsController');
 
-
 const router = express.Router();
+const { findState } = require('../utils/findState');
+const { findDistrict, isDistrictNameTakenInState } = require('../utils/district');
 
-// Add State
-router.post('/state', [
-  body('stateId').isString().withMessage('State ID is required'),
-  body('stateName').isString().withMessage('State name is required'),
+
+
+
+// ✅ POST: Create State
+router.post('/state', middleware.isAdmin
+  ,[
+  body('stateId').trim().notEmpty().withMessage('State ID is required'),
+  body('stateName').trim().notEmpty().withMessage('State name is required'),
+  body('status').optional().isIn(['active', 'inactive']).withMessage('Invalid status')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
-    const { stateId, stateName, status } = req.body;
+    let { stateId, stateName, status } = req.body;
+
+    // Normalize name for consistent comparison
+    stateName = stateName.trim();
+
+    // Check for duplicate state name using case-insensitive collation
+    const existing = await State.findOne({ stateName })
+      .collation({ locale: 'en', strength: 2 });
+
+    if (existing) return res.status(409).json({ message: 'State name already exists' });
+
     const newState = new State({ stateId, stateName, status });
     await newState.save();
     res.status(201).json({ message: 'State created successfully', state: newState });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Create state error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
-// Get All States
-router.get('/states', async (req, res) => {
+// ✅ GET: All States
+router.get('/states', middleware.isAdmin,async (req, res) => {
   try {
     const states = await State.find();
     res.status(200).json({ states });
@@ -44,43 +61,68 @@ router.get('/states', async (req, res) => {
   }
 });
 
-// Update State
-router.put('/state/:id', [
-  body('stateName').optional().isString().withMessage('State name is required'),
+// ✅ GET: Single State by ID or stateId
+router.get('/state/:id',middleware.isAdmin, async (req, res) => {
+  try {
+    const state = await findState(req.params.id);
+    if (!state) return res.status(404).json({ message: 'State not found' });
+    res.status(200).json({ state });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ✅ PUT: Update State
+router.put('/state/:id',middleware.isAdmin, [
+  body('stateName').optional().trim().notEmpty().withMessage('State name is required'),
   body('status').optional().isIn(['active', 'inactive']).withMessage('Invalid status')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
-    const updatedState = await State.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!updatedState) return res.status(404).json({ message: 'State not found' });
-    res.status(200).json({ message: 'State updated successfully', state: updatedState });
+    const state = await findState(req.params.id);
+    if (!state) return res.status(404).json({ message: 'State not found' });
+
+    const { stateName, status } = req.body;
+
+    if (stateName) {
+      const existing = await State.findOne({ stateName })
+        .collation({ locale: 'en', strength: 2 });
+
+      // Check if the duplicate is a *different* state
+      if (existing && existing._id.toString() !== state._id.toString()) {
+        return res.status(409).json({ message: 'State name already exists' });
+      }
+
+      state.stateName = stateName;
+    }
+
+    if (status) state.status = status;
+
+    await state.save();
+    res.status(200).json({ message: 'State updated successfully', state });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// ✅ DELETE (Soft): Set status to 'inactive'
+router.delete('/state/:id',middleware.isAdmin, async (req, res) => {
+  try {
+    const state = await findState(req.params.id);
+    if (!state) return res.status(404).json({ message: 'State not found' });
+
+    state.status = 'inactive';
+    await state.save();
+    res.status(200).json({ message: 'State marked as inactive', state });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Delete State
-// router.delete('/state/:id', async (req, res) => {
-//   try {
-//     const deletedState = await State.findByIdAndDelete(req.params.id);
-//     if (!deletedState) return res.status(404).json({ message: 'State not found' });
-//     res.status(200).json({ message: 'State deleted successfully' });
-//   } catch (err) {
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
-// Update State (inactive instead of delete)
-router.delete('/state/:id', async (req, res) => {
-    try {
-      const updatedState = await State.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
-      if (!updatedState) return res.status(404).json({ message: 'State not found' });
-      res.status(200).json({ message: 'State marked as inactive', state: updatedState });
-    } catch (err) {
-      res.status(500).json({ message: 'Server error' });
-    }
-  });
+
+
   
 
 
@@ -98,78 +140,90 @@ router.delete('/state/:id', async (req, res) => {
 
 
 
-
-
-
-// Add District
-router.post('/district', [
-  body('districtId').isString().withMessage('District ID is required'),
-  body('districtName').isString().withMessage('District name is required'),
-  body('stateId').isString().withMessage('State ID is required')
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-  try {
-    const { districtId, districtName, stateId, status } = req.body;
-    const state = await State.findOne({ stateId });
-    if (!state) return res.status(404).json({ message: 'State not found' });
-
-    const newDistrict = new District({ districtId, districtName, stateId, status });
-    await newDistrict.save();
-    res.status(201).json({ message: 'District created successfully', district: newDistrict });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Get All Districts by State
-router.get('/districts/:stateId', async (req, res) => {
-  try {
-    const districts = await District.find({ stateId: req.params.stateId });
-    res.status(200).json({ districts });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Update District
-router.put('/district/:id', [
-  body('districtName').optional().isString().withMessage('District name is required'),
+router.post('/district',middleware.isAdmin, [
+  body('districtId').trim().notEmpty().withMessage('District ID is required'),
+  body('districtName').trim().notEmpty().withMessage('District name is required'),
+  body('stateId').trim().notEmpty().withMessage('State ID is required'),
   body('status').optional().isIn(['active', 'inactive']).withMessage('Invalid status')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
-    const updatedDistrict = await District.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!updatedDistrict) return res.status(404).json({ message: 'District not found' });
-    res.status(200).json({ message: 'District updated successfully', district: updatedDistrict });
+    const { districtId, districtName, stateId, status } = req.body;
+
+    const state = await findState(stateId);
+    if (!state) return res.status(404).json({ message: 'State not found' });
+
+    const existingDistrictId = await District.findOne({ districtId });
+    if (existingDistrictId) return res.status(409).json({ message: 'District ID already exists' });
+
+    const nameExists = await isDistrictNameTakenInState(districtName, state.stateId);
+    if (nameExists) return res.status(409).json({ message: 'District name already exists in this state' });
+
+    const newDistrict = new District({ districtId, districtName, stateId: state.stateId, status });
+    await newDistrict.save();
+    res.status(201).json({ message: 'District created successfully', district: newDistrict });
+  } catch (err) {
+    console.error('Error creating district:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// ✅ Get all Districts by stateId or Mongo _id
+router.get('/districts/:stateId', middleware.isAdmin,async (req, res) => {
+  try {
+    const state = await findState(req.params.stateId);
+    if (!state) return res.status(404).json({ message: 'State not found' });
+
+    const districts = await District.find({ stateId: state.stateId });
+    res.status(200).json({ districts });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Delete District
-// router.delete('/district/:id', async (req, res) => {
-//   try {
-//     const deletedDistrict = await District.findByIdAndDelete(req.params.id);
-//     if (!deletedDistrict) return res.status(404).json({ message: 'District not found' });
-//     res.status(200).json({ message: 'District deleted successfully' });
-//   } catch (err) {
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
-// Update District (inactive instead of delete)
-router.delete('/district/:id', async (req, res) => {
-    try {
-      const updatedDistrict = await District.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
-      if (!updatedDistrict) return res.status(404).json({ message: 'District not found' });
-      res.status(200).json({ message: 'District marked as inactive', district: updatedDistrict });
-    } catch (err) {
-      res.status(500).json({ message: 'Server error' });
+// ✅ Update District by districtId or Mongo _id
+router.put('/district/:id', middleware.isAdmin,[
+  body('districtName').optional().trim().notEmpty().withMessage('District name is required'),
+  body('status').optional().isIn(['active', 'inactive']).withMessage('Invalid status')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  try {
+    const district = await findDistrict(req.params.id);
+    if (!district) return res.status(404).json({ message: 'District not found' });
+
+    if (req.body.districtName) {
+      const nameExists = await isDistrictNameTakenInState(req.body.districtName, district.stateId, district._id);
+      if (nameExists) return res.status(409).json({ message: 'District name already exists in this state' });
+      district.districtName = req.body.districtName;
     }
-  });
+
+    if (req.body.status) district.status = req.body.status;
+
+    await district.save();
+    res.status(200).json({ message: 'District updated successfully', district });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ✅ Soft Delete District by districtId or Mongo _id
+router.delete('/district/:id',middleware.isAdmin, async (req, res) => {
+  try {
+    const district = await findDistrict(req.params.id);
+    if (!district) return res.status(404).json({ message: 'District not found' });
+
+    district.status = 'inactive';
+    await district.save();
+    res.status(200).json({ message: 'District marked as inactive', district });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
   
 
 
@@ -180,7 +234,7 @@ router.delete('/district/:id', async (req, res) => {
 
 
 // Add Theatre
-router.post('/theatre', [
+router.post('/theatre',middleware.isAdmin, [
   body('theatreId').isString().withMessage('Theatre ID is required'),
   body('name').isString().withMessage('Theatre name is required'),
   body('districtId').isString().withMessage('District ID is required'),
@@ -205,7 +259,7 @@ router.post('/theatre', [
 });
 
 // Get All Theatres by District
-router.get('/theatres/:districtId', async (req, res) => {
+router.get('/theatres/:districtId',middleware.isAdmin, async (req, res) => {
   try {
     const theatres = await Theatre.find({ districtId: req.params.districtId });
     res.status(200).json({ theatres });
@@ -245,7 +299,7 @@ router.put('/theatre/:id', [
 //   }
 // });
 // Update Theatre (inactive instead of delete)
-router.delete('/theatre/:id', async (req, res) => {
+router.delete('/theatre/:id', middleware.isAdmin,async (req, res) => {
     try {
       const updatedTheatre = await Theatre.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
       if (!updatedTheatre) return res.status(404).json({ message: 'Theatre not found' });
@@ -274,7 +328,7 @@ router.delete('/theatre/:id', async (req, res) => {
 
 
 // ✅ Admin adds a screen (auto-generates seatingLayout)
-router.post('/add-screen', [
+router.post('/add-screen',middleware.isAdmin, [
   body('screenId').isString().withMessage('Screen ID is required'),
   body('theatreId').isString().withMessage('Theatre ID is required'),
   body('screenName').isString().withMessage('Screen name is required'),
@@ -357,7 +411,7 @@ router.post('/add-screen', [
 //   }
 // });
 // Update Screen (inactive instead of delete)
-router.delete('/screen/:id', async (req, res) => {
+router.delete('/screen/:id',middleware.isAdmin, async (req, res) => {
     try {
       const updatedScreen = await Screen.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
       if (!updatedScreen) return res.status(404).json({ message: 'Screen not found' });
@@ -377,7 +431,7 @@ router.delete('/screen/:id', async (req, res) => {
 
 
 // Add Movie
-router.post('/movie', [
+router.post('/movie',middleware.isAdmin, [
   body('movieId').isString().withMessage('Movie ID is required'),
   body('title').isString().trim().withMessage('Title is required'),
   body('genre').optional().isString().trim().withMessage('Genre must be a string'),
@@ -404,7 +458,7 @@ router.post('/movie', [
 });
 
 // Get All Movies
-router.get('/movies', async (req, res) => {
+router.get('/movies', middleware.isAdmin,async (req, res) => {
   try {
     const movies = await Movie.find();
     res.status(200).json({ movies });
@@ -414,7 +468,7 @@ router.get('/movies', async (req, res) => {
 });
 
 // Update Movie
-router.put('/movie/:id', [
+router.put('/movie/:id', middleware.isAdmin,[
   body('title').optional().isString().withMessage('Title is required'),
   body('genre').optional().isString().withMessage('Genre is required'),
   body('language').optional().isString().withMessage('Language is required'),
@@ -446,7 +500,7 @@ router.put('/movie/:id', [
 //   }
 // });
 // Update Movie (inactive instead of delete)
-router.delete('/movie/:id', async (req, res) => {
+router.delete('/movie/:id', middleware.isAdmin,async (req, res) => {
     try {
       const updatedMovie = await Movie.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
       if (!updatedMovie) return res.status(404).json({ message: 'Movie not found' });
@@ -465,15 +519,12 @@ router.delete('/movie/:id', async (req, res) => {
 
 
 
-
-
-
-// Add Movie Schedule
-router.post('/schedule', [
+router.post('/schedule',middleware.isAdmin, [
   body('theatreId').isString().withMessage('Theatre ID is required'),
   body('screenId').isString().withMessage('Screen ID is required'),
   body('movieId').isString().withMessage('Movie ID is required'),
-  body('date').isISO8601().toDate().withMessage('Valid date is required'),
+  body('startDate').isISO8601().toDate().withMessage('Valid start date is required'),
+  body('endDate').optional().isISO8601().toDate().withMessage('Valid end date is required'),
   body('timeSlot').isString().withMessage('Time slot is required'),
   body('startTime').isString().withMessage('Start time is required')
 ], async (req, res) => {
@@ -481,51 +532,90 @@ router.post('/schedule', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
-    const { theatreId, screenId, movieId, date, timeSlot, startTime, status = 'active' } = req.body;
+    const { theatreId, screenId, movieId, startDate, endDate, timeSlot, startTime, status = 'active' } = req.body;
+
+    // Ensure endDate is greater than startDate
+    const finalEndDate = endDate || startDate; // If endDate is not provided, use startDate
+    if (new Date(finalEndDate) < new Date(startDate)) {
+      return res.status(400).json({ message: 'End date cannot be before start date' });
+    }
 
     // Check theatre and movie
     const theatre = await Theatre.findOne({ theatreId });
     const movie = await Movie.findOne({ movieId });
     if (!theatre || !movie) return res.status(404).json({ message: 'Theatre or Movie not found' });
 
-    // Check if slot is already booked
-    const existingSchedule = await Schedule.findOne({ theatreId, screen: screenId, date, timeSlot, status: 'active' });
-    if (existingSchedule) {
-      return res.status(409).json({ message: 'Screen already has a movie scheduled in this time slot' });
+    // Loop over dates between startDate and endDate (inclusive)
+    let currentDate = new Date(startDate);
+    const end = new Date(finalEndDate);
+    const schedulesToCreate = [];
+
+    while (currentDate <= end) {
+      // Check if slot is already booked for the specific date
+      const existingSchedule = await Schedule.findOne({
+        theatreId,
+        screen: screenId,
+        date: currentDate,
+        timeSlot,
+        status: 'active'
+      });
+
+      if (existingSchedule) {
+        // Skip this date if slot is already booked
+        currentDate.setDate(currentDate.getDate() + 1);  // Move to next day
+        continue;
+      }
+
+      // Calculate endTime
+      const parseDuration = (durationStr) => {
+        const match = durationStr.match(/(\d+)h\s*(\d+)m/);
+        if (!match) return { hours: 0, minutes: 0 };
+        return { hours: parseInt(match[1]), minutes: parseInt(match[2]) };
+      };
+
+      const addTime = (start, duration) => {
+        const [startHours, startMinutes] = start.split(':').map(Number);
+        const totalMinutes = startHours * 60 + startMinutes + duration.hours * 60 + duration.minutes + 15;
+        const endHours = Math.floor(totalMinutes / 60);
+        const endMinutes = totalMinutes % 60;
+        return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+      };
+
+      const movieDuration = parseDuration(movie.duration); // e.g. "2h 32m"
+      const endTime = addTime(startTime, movieDuration);
+
+      // Check if the schedule should be inactive based on the endDate
+      const scheduleStatus = currentDate <= new Date(finalEndDate) ? 'active' : 'inactive';
+
+      // Create a new schedule for the current date
+      const newSchedule = new Schedule({
+        theatreId,
+        screen: screenId,
+        movieId,
+        date: new Date(currentDate),  // Ensure the date is correct
+        endDate: finalEndDate,
+        timeSlot,
+        startTime,
+        endTime,
+        status: scheduleStatus
+      });
+
+      schedulesToCreate.push(newSchedule);
+
+      // Move to the next day
+      currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Calculate endTime
-    const parseDuration = (durationStr) => {
-      const match = durationStr.match(/(\d+)h\s*(\d+)m/);
-      if (!match) return { hours: 0, minutes: 0 };
-      return { hours: parseInt(match[1]), minutes: parseInt(match[2]) };
-    };
+    // Bulk save schedules
+    await Schedule.insertMany(schedulesToCreate);
 
-    const addTime = (start, duration) => {
-      const [startHours, startMinutes] = start.split(':').map(Number);
-      const totalMinutes = startHours * 60 + startMinutes + duration.hours * 60 + duration.minutes + 15;
-      const endHours = Math.floor(totalMinutes / 60);
-      const endMinutes = totalMinutes % 60;
-      return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
-    };
+    // After schedules are created, handle the auto deactivation of expired schedules
+    await Schedule.updateMany(
+      { endDate: { $lt: new Date() }, status: 'active' },
+      { $set: { status: 'inactive' } }
+    );
 
-    const movieDuration = parseDuration(movie.duration); // e.g. "2h 32m"
-    const endTime = addTime(startTime, movieDuration);
-
-    // Save schedule
-    const newSchedule = new Schedule({
-      theatreId,
-      screen: screenId,
-      movieId,
-      date,
-      timeSlot,
-      startTime,
-      endTime,
-      status
-    });
-
-    await newSchedule.save();
-    res.status(201).json({ message: 'Schedule created successfully', schedule: newSchedule });
+    res.status(201).json({ message: 'Schedules created successfully', schedules: schedulesToCreate });
 
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -534,8 +624,11 @@ router.post('/schedule', [
 
 
 
+
+
+
 // Get All Movie Schedules by Theatre
-router.get('/schedules/:theatreId', async (req, res) => {
+router.get('/schedules/:theatreId',middleware.isAdmin, async (req, res) => {
   try {
     const schedules = await Schedule.find({ theatreId: req.params.theatreId });
     res.status(200).json({ schedules });
@@ -545,7 +638,7 @@ router.get('/schedules/:theatreId', async (req, res) => {
 });
 
 // Update Movie Schedule
-router.put('/schedule/:id', [
+router.put('/schedule/:id',middleware.isAdmin, [
   body('timeSlot').optional().isString().withMessage('Time slot is required'),
   body('status').optional().isIn(['active', 'inactive']).withMessage('Invalid status')
 ], async (req, res) => {
@@ -572,7 +665,7 @@ router.put('/schedule/:id', [
 //   }
 // });
 // Update Movie Schedule (inactive instead of delete)
-router.delete('/schedule/:id', async (req, res) => {
+router.delete('/schedule/:id',middleware.isAdmin, async (req, res) => {
     try {
       const updatedSchedule = await Schedule.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
       if (!updatedSchedule) return res.status(404).json({ message: 'Schedule not found' });
@@ -597,7 +690,7 @@ router.delete('/schedule/:id', async (req, res) => {
 
 
 // Get All Bookings
-router.get('/bookings', async (req, res) => {
+router.get('/bookings', middleware.isAdmin,async (req, res) => {
   try {
     const bookings = await Booking.find().populate('userId').populate('scheduleId');
     res.status(200).json({ bookings });
@@ -607,7 +700,7 @@ router.get('/bookings', async (req, res) => {
 });
 
 // Update Booking
-router.put('/booking/:id', [
+router.put('/booking/:id',middleware.isAdmin, [
   body('bookingStatus').optional().isIn(['confirmed', 'cancelled', 'pending']).withMessage('Invalid status')
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -633,7 +726,7 @@ router.put('/booking/:id', [
 //   }
 // });
 // Update Booking (inactive instead of delete)
-router.delete('/booking/:id', async (req, res) => {
+router.delete('/booking/:id', middleware.isAdmin,async (req, res) => {
     try {
       const updatedBooking = await Booking.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
       if (!updatedBooking) return res.status(404).json({ message: 'Booking not found' });
@@ -649,10 +742,10 @@ router.delete('/booking/:id', async (req, res) => {
 
   
   // Analytics routes
-  router.get('/booking-trends', middleware.isAdmin, adminAnalyticsController.getBookingTrends);
-  router.get('/peak-hours', middleware.isAdmin, adminAnalyticsController.getPeakHours);
-  router.get('/abandoned-bookings', middleware.isAdmin, adminAnalyticsController.getAbandonedBookings);
-  router.get('/popular-seats', middleware.isAdmin, adminAnalyticsController.getPopularSeats);
+  // router.get('/booking-trends', middleware.isAdmin, adminAnalyticsController.getBookingTrends);
+  // router.get('/peak-hours', middleware.isAdmin, adminAnalyticsController.getPeakHours);
+  // router.get('/abandoned-bookings', middleware.isAdmin, adminAnalyticsController.getAbandonedBookings);
+  // router.get('/popular-seats', middleware.isAdmin, adminAnalyticsController.getPopularSeats);
   
   module.exports = router;
   

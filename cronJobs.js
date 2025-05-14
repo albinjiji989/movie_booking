@@ -95,3 +95,33 @@ cron.schedule('*/2 * * * *', async () => {
     console.error('❌ Error cleaning expired unpaid bookings:', err.message);
   }
 });
+
+
+
+async function updateInactiveSchedules() {
+  try {
+    const currentDate = moment().toDate(); // Current date
+    
+    // Find all active schedules where the endDate has passed
+    const schedulesToUpdate = await Schedule.find({
+      endDate: { $lt: currentDate }, // endDate is less than the current date
+      status: 'active'  // Only update active schedules
+    });
+
+    if (schedulesToUpdate.length > 0) {
+      for (const schedule of schedulesToUpdate) {
+        schedule.status = 'inactive';  // Mark as inactive
+        await schedule.save();  // Save the updated schedule
+      }
+
+      console.log(`${schedulesToUpdate.length} schedules updated to inactive.`);
+    } else {
+      console.log('No schedules need updating.');
+    }
+  } catch (err) {
+    console.error('Error updating schedules:', err.message);
+  }
+}
+
+// Schedule the task to run every day at midnight
+cron.schedule('0 0 * * *', updateInactiveSchedules); // Run at midnight every day

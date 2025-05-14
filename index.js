@@ -11,6 +11,9 @@ const RegLoginRoute = require('./routes/RegLoginRoute');
 const adminRoute = require('./routes/adminRoute');
 const userRoute = require('./routes/userRoute');
 
+// Cron Job - Update Inactive Schedules
+require('./cronJobs');  // Import and start the cron job to mark schedules as inactive
+
 const app = express();
 const port = process.env.PORT || 4321;
 

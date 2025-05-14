@@ -1,4 +1,3 @@
-// lockedSeatSchema.js
 const mongoose = require('mongoose');
 
 const lockedSeatSchema = new mongoose.Schema({
@@ -26,6 +25,7 @@ const lockedSeatSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
-lockedSeatSchema.index({ scheduleId: 1, seatId: 1 }, { unique: true });
+// Ensure unique combination of scheduleId + seatId for each user
+lockedSeatSchema.index({ scheduleId: 1, seatId: 1, userId: 1 }, { unique: true });
 
 module.exports = mongoose.model('LockedSeat', lockedSeatSchema);

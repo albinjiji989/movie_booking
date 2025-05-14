@@ -14,7 +14,7 @@ const userSchema = new mongoose.Schema({
     unique: true,
     minLength: 3,
     maxLength: 20,
-    index: true  // Added index
+    index: true
   },
   email: {
     type: String,
@@ -22,8 +22,8 @@ const userSchema = new mongoose.Schema({
     unique: true,
     lowercase: true,
     trim: true,
-    match: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|in)$/, // Only .com or .in
-    index: true  // Added index
+    match: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|in)$/,
+    index: true
   },
   password: {
     type: String,
@@ -35,18 +35,18 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['User', 'admin'],
     default: 'User',
-    index: true  // Added index (small optimization for role-based queries)
+    index: true
   },
   status: {
     type: String,
     enum: ['Active', 'Inactive'],
     default: 'Active',
-    index: true  // Added index (for filtering active/inactive users quickly)
+    index: true
   },
   userdetailsid: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'UserDetails',
-    index: true  // Added index
+    index: true
   }
 }, { timestamps: true });
 
